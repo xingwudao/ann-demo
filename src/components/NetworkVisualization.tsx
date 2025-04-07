@@ -1,11 +1,16 @@
 import { useEffect, useRef } from 'react';
 import * as tf from '@tensorflow/tfjs';
-import { ModelConfig } from '@/utils/model';
 
 interface NetworkVisualizationProps {
-  model: tf.Sequential | null;
-  config: ModelConfig;
+  model: tf.LayersModel | null;
+  config: {
+    hiddenLayers: number[];
+  };
   inputFeatures: string[];
+}
+
+interface LayerWeights {
+  weights: number[][];
 }
 
 export default function NetworkVisualization({ model, config, inputFeatures }: NetworkVisualizationProps) {
@@ -19,105 +24,106 @@ export default function NetworkVisualization({ model, config, inputFeatures }: N
   const neuronSpacing = 40;
   
   useEffect(() => {
-    if (!svgRef.current) return;
-    
-    // 获取权重（如果模型已训练）
-    const weights = model?.layers.map(layer => {
-      const w = layer.getWeights();
-      return w.length > 0 ? w[0].arraySync() : null;
-    }) || [];
-    
-    // 获取每层神经元数量
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    // 清除之前的内容
+    while (svg.firstChild) {
+      svg.removeChild(svg.firstChild);
+    }
+
+    // 计算每一层的神经元数量
     const layerSizes = [2, ...config.hiddenLayers, 1];
     
-    // 清空 SVG
-    const svg = svgRef.current;
-    svg.innerHTML = '';
-    
+    // 获取模型的权重
+    const weights: LayerWeights[] = [];
+    if (model) {
+      model.layers.forEach((layer, i) => {
+        if (i > 0) { // 跳过输入层
+          const layerWeights = layer.getWeights();
+          if (layerWeights.length > 0) {
+            const w = layerWeights[0];
+            weights.push({
+              weights: Array.isArray(w) ? w : w.arraySync() as number[][]
+            });
+          }
+        }
+      });
+    }
+
     // 绘制每一层
     layerSizes.forEach((size, layerIndex) => {
-      const layerX = 100 + layerIndex * layerSpacing;
-      
-      // 绘制该层的神经元
+      const layerX = 60 + layerIndex * layerSpacing;
+      const startY = (height - (size - 1) * neuronSpacing) / 2;
+
+      // 绘制这一层的每个神经元
       for (let i = 0; i < size; i++) {
-        const neuronY = height/2 + (i - (size-1)/2) * neuronSpacing;
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        const y = startY + i * neuronSpacing;
         
-        // 创建神经元圆圈
-        const neuron = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-        neuron.setAttribute("cx", layerX.toString());
-        neuron.setAttribute("cy", neuronY.toString());
-        neuron.setAttribute("r", neuronRadius.toString());
-        neuron.setAttribute("fill", "#fff");
-        neuron.setAttribute("stroke", "#666");
-        neuron.setAttribute("stroke-width", "2");
-        svg.appendChild(neuron);
-        
+        circle.setAttribute("cx", layerX.toString());
+        circle.setAttribute("cy", y.toString());
+        circle.setAttribute("r", neuronRadius.toString());
+        circle.setAttribute("fill", "#fff");
+        circle.setAttribute("stroke", "#666");
+        circle.setAttribute("stroke-width", "2");
+        svg.appendChild(circle);
+
         // 添加标签
-        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        text.setAttribute("x", layerX.toString());
-        text.setAttribute("y", (neuronY + neuronRadius + 15).toString());
-        text.setAttribute("text-anchor", "middle");
-        text.setAttribute("fill", "#666");
-        text.setAttribute("font-size", "12");
-        
-        // 为输入层添加特征名称
         if (layerIndex === 0) {
-          text.textContent = inputFeatures[i] || `输入 ${i+1}`;
+          // 输入层标签
+          const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          text.setAttribute("x", (layerX - neuronRadius - 5).toString());
+          text.setAttribute("y", y.toString());
+          text.setAttribute("text-anchor", "end");
+          text.setAttribute("alignment-baseline", "middle");
+          text.setAttribute("class", "text-sm");
+          text.textContent = inputFeatures[i];
+          svg.appendChild(text);
         } else if (layerIndex === layerSizes.length - 1) {
+          // 输出层标签
+          const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          text.setAttribute("x", (layerX + neuronRadius + 5).toString());
+          text.setAttribute("y", y.toString());
+          text.setAttribute("text-anchor", "start");
+          text.setAttribute("alignment-baseline", "middle");
+          text.setAttribute("class", "text-sm");
           text.textContent = "通过概率";
+          svg.appendChild(text);
         }
-        svg.appendChild(text);
-        
-        // 绘制到下一层的连接
+
+        // 如果不是最后一层，绘制到下一层的连接
         if (layerIndex < layerSizes.length - 1) {
           const nextLayerSize = layerSizes[layerIndex + 1];
-          const weightMatrix = weights[layerIndex];
-          
+          const nextLayerStartY = (height - (nextLayerSize - 1) * neuronSpacing) / 2;
+          const weightMatrix = weights[layerIndex]?.weights;
+
           for (let j = 0; j < nextLayerSize; j++) {
-            const nextNeuronY = height/2 + (j - (nextLayerSize-1)/2) * neuronSpacing;
-            
             const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-            line.setAttribute("x1", (layerX + neuronRadius).toString());
-            line.setAttribute("y1", neuronY.toString());
-            line.setAttribute("x2", (layerX + layerSpacing - neuronRadius).toString());
-            line.setAttribute("y2", nextNeuronY.toString());
+            const nextY = nextLayerStartY + j * neuronSpacing;
             
-            if (weightMatrix) {
+            line.setAttribute("x1", (layerX + neuronRadius).toString());
+            line.setAttribute("y1", y.toString());
+            line.setAttribute("x2", (layerX + layerSpacing - neuronRadius).toString());
+            line.setAttribute("y2", nextY.toString());
+
+            if (weightMatrix && Array.isArray(weightMatrix[i])) {
               // 如果有权重，使用权重值设置线条样式
-              const weight = weightMatrix[i] ? weightMatrix[i][j] : 0;
+              const weight = weightMatrix[i][j];
               const opacity = Math.min(Math.abs(weight), 1);
               line.setAttribute("stroke", weight > 0 ? "#4CAF50" : "#f44336");
               line.setAttribute("stroke-width", (Math.abs(weight) * 2).toString());
               line.setAttribute("stroke-opacity", opacity.toString());
             } else {
-              // 如果没有权重，使用默认样式
-              line.setAttribute("stroke", "#999");
+              // 默认样式
+              line.setAttribute("stroke", "#ccc");
               line.setAttribute("stroke-width", "1");
-              line.setAttribute("stroke-opacity", "0.3");
             }
             
-            svg.appendChild(line);
+            svg.insertBefore(line, svg.firstChild); // 将线条放在最底层
           }
         }
       }
-      
-      // 添加层标签
-      const layerLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      layerLabel.setAttribute("x", layerX.toString());
-      layerLabel.setAttribute("y", "30");
-      layerLabel.setAttribute("text-anchor", "middle");
-      layerLabel.setAttribute("fill", "#333");
-      layerLabel.setAttribute("font-size", "14");
-      layerLabel.setAttribute("font-weight", "bold");
-      
-      if (layerIndex === 0) {
-        layerLabel.textContent = "输入层";
-      } else if (layerIndex === layerSizes.length - 1) {
-        layerLabel.textContent = "输出层";
-      } else {
-        layerLabel.textContent = `隐藏层 ${layerIndex}`;
-      }
-      svg.appendChild(layerLabel);
     });
   }, [model, config, inputFeatures]);
 
